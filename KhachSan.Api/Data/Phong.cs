@@ -12,4 +12,5 @@
         public ICollection<DatPhong> DatPhong { get; set; }
         public string MoTa { get; internal set; }
     }
+
 }

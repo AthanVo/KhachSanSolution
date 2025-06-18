@@ -1,8 +1,11 @@
 ﻿using KhachSan.Api.Data;
+using KhachSan.Api.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using static KhachSan.Api.Service.EmailSetting;
+using Microsoft.AspNetCore.Diagnostics;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,10 +14,18 @@ builder.Services.AddLogging(logging =>
 {
     logging.AddConsole();
     logging.AddDebug();
+    logging.SetMinimumLevel(LogLevel.Debug); // Ensure detailed logs
 });
 
 // Thêm dịch vụ controllers
 builder.Services.AddControllers();
+
+// Cấu hình EmailSettings
+builder.Services.Configure<EmailSettings>(
+    builder.Configuration.GetSection("EmailSettings"));
+
+// Đăng ký EmailService
+builder.Services.AddScoped<EmailService>();
 
 // Thêm Swagger
 builder.Services.AddEndpointsApiExplorer();
@@ -29,10 +40,10 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowSpecificOrigin", policy =>
     {
-        policy.WithOrigins("http://127.0.0.1:5500") // Chỉ định nguồn gốc frontend
-              .AllowAnyMethod()                     // Cho phép tất cả phương thức (GET, POST, OPTIONS, v.v.)
-              .AllowAnyHeader()                     // Cho phép tất cả header
-              .AllowCredentials();                  // Cho phép gửi credentials (nếu cần)
+        policy.WithOrigins("http://127.0.0.1:5500", "https://127.0.0.1:5500")
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials();
     });
 });
 
@@ -52,9 +63,21 @@ builder.Services.AddAuthentication(options =>
         ValidIssuer = builder.Configuration["Jwt:Issuer"],
         ValidAudience = builder.Configuration["Jwt:Audience"],
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"])),
-        ClockSkew = TimeSpan.Zero // Loại bỏ thời gian lệch mặc định
+        ClockSkew = TimeSpan.Zero
+    };
+    options.Events = new JwtBearerEvents
+    {
+        OnAuthenticationFailed = context =>
+        {
+            context.Response.StatusCode = 401;
+            context.Response.ContentType = "application/json";
+            var message = context.Exception.Message;
+            context.Response.WriteAsync($"{{ \"success\": false, \"message\": \"Authentication failed: {message}\" }}");
+            return Task.CompletedTask;
+        }
     };
 });
+
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
@@ -62,29 +85,28 @@ var app = builder.Build();
 // Cấu hình middleware pipeline
 if (app.Environment.IsDevelopment())
 {
+    app.UseDeveloperExceptionPage(); // Detailed errors in Development
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+else
+{
+    app.UseExceptionHandler(errorApp =>
+    {
+        errorApp.Run(async context =>
+        {
+            context.Response.StatusCode = 500;
+            context.Response.ContentType = "application/json";
+            var errorFeature = context.Features.Get<IExceptionHandlerFeature>();
+            var errorMessage = errorFeature?.Error.Message ?? "Lỗi hệ thống.";
+            await context.Response.WriteAsync($"{{ \"success\": false, \"message\": \"{errorMessage}\" }}");
+        });
+    });
+}
 
-// Tạm thời tắt HTTPS redirection để tránh lỗi CORS trong phát triển
-// app.UseHttpsRedirection(); // Bỏ comment trong sản xuất nếu dùng HTTPS
-
-app.UseCors("AllowSpecificOrigin"); // Sử dụng chính sách CORS cụ thể
-
+app.UseCors("AllowSpecificOrigin");
 app.UseAuthentication();
 app.UseAuthorization();
-
 app.MapControllers();
-
-// Xử lý lỗi toàn cục (tùy chọn, để debug dễ hơn)
-app.UseExceptionHandler(errorApp =>
-{
-    errorApp.Run(async context =>
-    {
-        context.Response.StatusCode = 500;
-        context.Response.ContentType = "application/json";
-        await context.Response.WriteAsync("{\"success\":false,\"message\":\"Lỗi hệ thống. Vui lòng thử lại sau.\"}");
-    });
-});
 
 app.Run();

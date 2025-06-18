@@ -7,7 +7,7 @@
         public int? MaDatPhong { get; set; }
         public int? MaNhomDatPhong { get; set; }
         public DateTime NgayXuat { get; set; }
-        public decimal TongTien { get; set; }
+        public decimal? TongTien { get; set; }
         public string PhuongThucThanhToan { get; set; }
         public string TrangThaiThanhToan { get; set; }
         public string LoaiHoaDon { get; set; }

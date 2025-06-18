@@ -21,6 +21,7 @@ namespace KhachSan.Controllers
             _logger = logger;
         }
 
+
         // Lấy danh sách nhân viên sẵn sàng
         [HttpGet("staff/available")]
         public async Task<IActionResult> GetAvailableStaff()
@@ -194,7 +195,7 @@ namespace KhachSan.Controllers
                                 MaNguoiGui = maNhanVien,
                                 MaNguoiNhan = model.MaNhanVienCaTiepTheo.Value,
                                 TieuDe = "Giao ca làm việc",
-                                NoiDung = $"Nhân viên {nhanVienHienTai?.HoTen ?? "Không xác định"} đã giao ca cho bạn với số tiền chuyển giao: {model.TongTienChuyenGiao:#,##0} VNĐ",
+                                NoiDung = $"Nhân viên {nhanVienHienTai?.HoTen ?? "Không xác định"} đã giao ca cho bạn. Tổng tiền trong ca: {model.TongTienTrongCa:#,##0} VNĐ, số tiền chuyển giao: {model.TongTienChuyenGiao:#,##0} VNĐ",
                                 LoaiThongBao = "Giao ca",
                                 ThoiGianGui = DateTime.Now,
                                 TrangThai = "Chưa đọc"
@@ -275,9 +276,17 @@ namespace KhachSan.Controllers
             try
             {
                 // Lấy maNhanVien từ token
-                if (!int.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int maNhanVien))
+                var nameIdentifierClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+                if (nameIdentifierClaim == null)
                 {
-                    return Unauthorized(new { success = false, message = "Không xác định được người dùng" });
+                    _logger.LogWarning("Không tìm thấy claim 'NameIdentifier' trong token.");
+                    return Unauthorized(new { success = false, message = "Không xác định được người dùng: Thiếu claim 'NameIdentifier'" });
+                }
+
+                if (!int.TryParse(nameIdentifierClaim.Value, out int maNhanVien))
+                {
+                    _logger.LogWarning("Claim 'NameIdentifier' không phải là số nguyên hợp lệ: {ClaimValue}", nameIdentifierClaim.Value);
+                    return Unauthorized(new { success = false, message = "Không xác định được người dùng: Claim 'NameIdentifier' không hợp lệ" });
                 }
 
                 var user = await _context.NguoiDung
@@ -286,8 +295,12 @@ namespace KhachSan.Controllers
                     .FirstOrDefaultAsync();
 
                 if (user == null)
+                {
+                    _logger.LogWarning("Không tìm thấy người dùng với MaNguoiDung: {MaNguoiDung}", maNhanVien);
                     return Ok(new { success = false, message = "Không tìm thấy thông tin người dùng!" });
+                }
 
+                _logger.LogInformation("Lấy thông tin người dùng thành công: MaNguoiDung = {MaNguoiDung}, HoTen = {HoTen}", user.MaNguoiDung, user.HoTen);
                 return Ok(new { success = true, user });
             }
             catch (Exception ex)
@@ -525,7 +538,6 @@ namespace KhachSan.Controllers
                     _context.KhachHangLuuTru.Update(khachHang);
                 }
 
-                // Lấy maNhanVien từ token, nhưng không trả về lỗi nếu không có
                 int? maNhanVien = null;
                 if (int.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int parsedMaNhanVien))
                 {
@@ -567,6 +579,7 @@ namespace KhachSan.Controllers
                 return StatusCode(500, new { success = false, message = $"Lỗi khi đặt phòng: {ex.Message}, Inner: {ex.InnerException?.Message}" });
             }
         }
+
 
         // Lấy chi tiết đặt phòng
         [HttpGet("GetBookingDetails/{maDatPhong}")]
@@ -864,7 +877,7 @@ namespace KhachSan.Controllers
         }
 
         // Thêm nhóm đặt phòng
-        [HttpPost("AddGroup")]
+        [HttpPost("add-group")]
         public async Task<IActionResult> AddGroup([FromBody] NhomDatPhongRequest request)
         {
             try
@@ -874,13 +887,6 @@ namespace KhachSan.Controllers
                     return BadRequest(new { success = false, message = "Tên nhóm, người đại diện, và số điện thoại không được để trống." });
                 }
 
-                // Lấy maNhanVien từ token, nhưng không trả về lỗi nếu không có
-                int? maNhanVien = null;
-                if (int.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int parsedMaNhanVien))
-                {
-                    maNhanVien = parsedMaNhanVien;
-                }
-
                 var existingGroup = await _context.NhomDatPhong
                     .FirstOrDefaultAsync(g => g.TenNhom == request.TenNhom && g.TrangThai != "Đã hủy");
 
@@ -888,8 +894,8 @@ namespace KhachSan.Controllers
                 {
                     existingGroup.HoTenNguoiDaiDien = request.HoTenNguoiDaiDien;
                     existingGroup.SoDienThoaiNguoiDaiDien = request.SoDienThoaiNguoiDaiDien;
-                    existingGroup.NgayNhanPhong = request.NgayNhanPhong;
-                    existingGroup.NgayTraPhong = request.NgayTraPhong;
+                    existingGroup.NgayNhanPhong = request.NgayNhanPhong; // Lưu ngày nhận phòng
+                    existingGroup.NgayTraPhong = request.NgayTraPhong;   // Lưu ngày trả phòng
 
                     var existingRooms = _context.NhomPhong.Where(np => np.MaNhomDatPhong == existingGroup.MaNhomDatPhong);
                     _context.NhomPhong.RemoveRange(existingRooms);
@@ -915,10 +921,10 @@ namespace KhachSan.Controllers
                     TenNhom = request.TenNhom,
                     HoTenNguoiDaiDien = request.HoTenNguoiDaiDien,
                     SoDienThoaiNguoiDaiDien = request.SoDienThoaiNguoiDaiDien,
-                    MaNhanVien = (int)maNhanVien,
+                    MaNhanVien = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "1"),
                     NgayTao = DateTime.Now,
-                    NgayNhanPhong = request.NgayNhanPhong,
-                    NgayTraPhong = request.NgayTraPhong,
+                    NgayNhanPhong = request.NgayNhanPhong, // Lưu ngày nhận phòng
+                    NgayTraPhong = request.NgayTraPhong,   // Lưu ngày trả phòng
                     TrangThai = "Đang xử lý"
                 };
 
@@ -943,7 +949,7 @@ namespace KhachSan.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Lỗi khi thêm nhóm: {Message}", ex.Message);
-                return StatusCode(500, new { success = false, message = $"Lỗi khi thêm nhóm: {ex.Message}" });
+                return StatusCode(500, new { success = false, message = ex.Message });
             }
         }
 
@@ -1128,7 +1134,6 @@ namespace KhachSan.Controllers
             {
                 var rooms = await _context.Phong
                     .Include(p => p.LoaiPhong)
-                    .Where(p => !p.DangSuDung)
                     .Select(p => new
                     {
                         MaPhong = p.MaPhong,
@@ -1140,13 +1145,48 @@ namespace KhachSan.Controllers
                         GiaTheoNgay = p.LoaiPhong.GiaTheoNgay
                     })
                     .ToListAsync();
-
                 return Ok(new { success = true, rooms });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Lỗi khi tải danh sách phòng: {Message}", ex.Message);
                 return StatusCode(500, new { success = false, message = $"Lỗi khi tải danh sách phòng: {ex.Message}" });
+            }
+        }
+
+        [HttpGet("GetRoomTypes")]
+        public async Task<IActionResult> GetRoomTypes()
+        {
+            try
+            {
+                var roomTypes = await _context.LoaiPhong
+                    .Select(lp => new { TenLoaiPhong = lp.TenLoaiPhong })
+                    .Distinct()
+                    .ToListAsync();
+                return Ok(new { success = true, roomTypes });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Lỗi khi lấy danh sách loại phòng: {Message}", ex.Message);
+                return StatusCode(500, new { success = false, message = $"Lỗi khi lấy danh sách loại phòng: {ex.Message}" });
+            }
+        }
+
+        [HttpGet("GetRoomStatuses")]
+        public async Task<IActionResult> GetRoomStatuses()
+        {
+            try
+            {
+                var statuses = await _context.Phong
+                    .Select(p => p.DangSuDung)
+                    .Distinct()
+                    .ToListAsync();
+                return Ok(new { success = true, statuses });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Lỗi khi lấy danh sách trạng thái phòng: {Message}", ex.Message);
+                return StatusCode(500, new { success = false, message = $"Lỗi khi lấy danh sách trạng thái phòng: {ex.Message}" });
             }
         }
 
