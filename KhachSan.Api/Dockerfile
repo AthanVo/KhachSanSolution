@@ -27,7 +27,7 @@ ENV EmailSettings__SmtpServer=smtp.gmail.com
 ENV EmailSettings__SmtpPort=587
 ENV EmailSettings__SenderEmail=ducthinh25042003@gmail.com
 ENV EmailSettings__SenderPassword=fwcgokjijwcpyssk
-ENV EmailSettings__SenderName=Khách Sạn Đức Thịnh
+
 
 # Health check (cần thêm endpoint /health nếu muốn sử dụng)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD curl --fail http://localhost:5000/health || exit 1
