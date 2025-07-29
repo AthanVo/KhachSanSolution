@@ -14,7 +14,7 @@ builder.Services.AddLogging(logging =>
 {
     logging.AddConsole();
     logging.AddDebug();
-    logging.SetMinimumLevel(LogLevel.Debug); // Ensure detailed logs
+    logging.SetMinimumLevel(LogLevel.Debug);
 });
 
 // Thêm dịch vụ controllers
@@ -35,19 +35,32 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddDbContext<ApplicationDBContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Cấu hình CORS
+// Cấu hình CORS từ appsettings
+var allowedOrigins = builder.Configuration.GetSection("CORS:AllowedOrigins").Get<string[]>()
+    ?? new[] { "http://localhost:3000", "https://localhost:3000" };
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowSpecificOrigin", policy =>
     {
-        policy.WithOrigins("http://127.0.0.1:5500", "https://127.0.0.1:5500", "https://hotel-booking-frontend-bo11.onrender.com")
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials();
     });
 });
 
-// Cấu hình JWT Authentication
+// Cấu hình JWT Authentication từ appsettings
+var jwtKey = builder.Configuration["Jwt:Key"];
+var jwtIssuer = builder.Configuration["Jwt:Issuer"];
+var jwtAudience = builder.Configuration["Jwt:Audience"];
+var jwtExpiryMinutes = builder.Configuration.GetValue<int>("Jwt:ExpiryInMinutes", 60);
+
+if (string.IsNullOrEmpty(jwtKey) || jwtKey.Length < 32)
+{
+    throw new InvalidOperationException("JWT Key must be at least 32 characters long");
+}
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -60,19 +73,34 @@ builder.Services.AddAuthentication(options =>
         ValidateAudience = true,
         ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
-        ValidIssuer = builder.Configuration["Jwt:Issuer"],
-        ValidAudience = builder.Configuration["Jwt:Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"])),
-        ClockSkew = TimeSpan.Zero
+        ValidIssuer = jwtIssuer,
+        ValidAudience = jwtAudience,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+        ClockSkew = TimeSpan.FromMinutes(5) // Cho phép lệch thời gian 5 phút
     };
+
     options.Events = new JwtBearerEvents
     {
         OnAuthenticationFailed = context =>
         {
+            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogError($"JWT Authentication failed: {context.Exception.Message}");
+
             context.Response.StatusCode = 401;
             context.Response.ContentType = "application/json";
             var message = context.Exception.Message;
-            context.Response.WriteAsync($"{{ \"success\": false, \"message\": \"Authentication failed: {message}\" }}");
+            return context.Response.WriteAsync($"{{ \"success\": false, \"message\": \"Authentication failed: {message}\" }}");
+        },
+        OnTokenValidated = context =>
+        {
+            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogInformation("JWT Token validated successfully");
+            return Task.CompletedTask;
+        },
+        OnChallenge = context =>
+        {
+            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogWarning($"JWT Challenge: {context.Error}, {context.ErrorDescription}");
             return Task.CompletedTask;
         }
     };
@@ -85,7 +113,7 @@ var app = builder.Build();
 // Cấu hình middleware pipeline
 if (app.Environment.IsDevelopment())
 {
-    app.UseDeveloperExceptionPage(); // Detailed errors in Development
+    app.UseDeveloperExceptionPage();
     app.UseSwagger();
     app.UseSwaggerUI();
 }
@@ -104,7 +132,25 @@ else
     });
 }
 
-app.UseCors("AllowSpecificOrigin");
+// Thêm middleware để log requests (hữu ích cho debug CORS)
+app.Use(async (context, next) =>
+{
+    var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+    logger.LogInformation($"Request: {context.Request.Method} {context.Request.Path} from Origin: {context.Request.Headers.Origin}");
+
+    // Log các headers quan trọng
+    if (context.Request.Headers.ContainsKey("Authorization"))
+    {
+        logger.LogInformation("Authorization header present");
+    }
+
+    await next();
+
+    logger.LogInformation($"Response: {context.Response.StatusCode}");
+});
+
+// Thứ tự middleware quan trọng
+app.UseCors("AllowSpecificOrigin"); // CORS phải đứng trước Authentication
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
